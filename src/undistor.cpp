@@ -12,8 +12,8 @@ void Undistor::ReciveSourceImg(cv_bridge::CvImagePtr& img_ptr) {
 
 void Undistor::Processor() {
     cv::Mat map1, map2;
-    cv::fisheye::initUndistortRectifyMap(K, D, cv::Mat(), K, cv::Size(640,480), CV_16SC2, map1, map2);
-    cv::remap(_src_img, undistort_img, map1, map2, cv::INTER_LINEAR, cv::BORDER_CONSTANT);
-    cv::imshow("undistort", undistort_img);
+    cv::fisheye::initUndistortRectifyMap(K, D, cv::Mat(), K,
+        cv::Size(_src_img.cols,_src_img.rows), CV_16SC2, map1, map2);
+    cv::remap(_src_img, undistort_img, map1, map2, cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+    // cv::imshow("undistort", undistort_img);
 }
-

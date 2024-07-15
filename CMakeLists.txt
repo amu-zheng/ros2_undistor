@@ -13,6 +13,8 @@ find_package(OpenCV 4         REQUIRED)
 find_package(sensor_msgs      REQUIRED)
 find_package(cv_bridge        REQUIRED)
 find_package(image_transport  REQUIRED)
+find_package(tf2_ros          REQUIRED)
+find_package(geometry_msgs    REQUIRED)
 
 add_executable(fisheye-test
         src/fisheye-test.cpp
@@ -29,6 +31,7 @@ ament_target_dependencies(
   "sensor_msgs"
   "cv_bridge"
   "image_transport"
+  "tf2_ros"
 )
 
 install(TARGETS fisheye-test
