@@ -24,9 +24,9 @@ public:
     // publishStaticTransform();
   }
 
-  void topic_callback(const sensor_msgs::msg::Image::SharedPtr msg) const {
-    cv_bridge::CvImagePtr cv_ptr;
+  void topic_callback(const sensor_msgs::msg::Image::SharedPtr& msg) const {
     try {
+      cv_bridge::CvImagePtr cv_ptr;
       cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
       // cv::imshow("test", cv_ptr->image);
 
@@ -169,7 +169,7 @@ public:
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster>          _static_broadcaster;
 };
 
-void log_init(char* argv) {
+void log_init(const char* argv) {
   FLAGS_logbufsecs = 0;
   FLAGS_colorlogtostderr = true;
   // FLAGS_logtostderr = true;
@@ -182,7 +182,7 @@ void log_init(char* argv) {
   google::InitGoogleLogging(argv);
 }
 
-int main(int argc, char ** argv) {
+int main(const int argc, char ** argv) {
   (void) argc;
   (void) argv;
   log_init(argv[0]);
