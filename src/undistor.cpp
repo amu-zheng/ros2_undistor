@@ -8,6 +8,7 @@ void Undistor::ReciveSourceImg(cv_bridge::CvImagePtr& img_ptr) {
     _src_img = img_ptr->image;
     _time_stamp = img_ptr->header.stamp.sec;
     Processor();
+    SuperTool::external_process();
 }
 
 void Undistor::Processor() {

@@ -8,6 +8,9 @@
 #include <Eigen/Dense>
 #include <Eigen/Core>
 #include <opencv2/opencv.hpp>
+#include <glog/logging.h>
+
+#include "tool.h"
 
 class Undistor {
  public:

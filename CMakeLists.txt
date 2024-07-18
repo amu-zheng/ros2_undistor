@@ -15,10 +15,13 @@ find_package(cv_bridge        REQUIRED)
 find_package(image_transport  REQUIRED)
 find_package(tf2_ros          REQUIRED)
 find_package(geometry_msgs    REQUIRED)
+find_package(ament_index_cpp  REQUIRED)
+find_package(glog             REQUIRED)
 
 add_executable(fisheye-test
         src/fisheye-test.cpp
         src/undistor.cpp
+        src/tool.cpp
 )
 target_include_directories(fisheye-test PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -32,6 +35,10 @@ ament_target_dependencies(
   "cv_bridge"
   "image_transport"
   "tf2_ros"
+)
+
+target_link_libraries(fisheye-test
+      glog::glog
 )
 
 install(TARGETS fisheye-test
