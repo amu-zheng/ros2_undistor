@@ -1,39 +1,51 @@
 #include <cstdio>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.hpp>
+#include <memory>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <message_filters/subscriber.h>
+#include <message_filters/time_synchronizer.h>
+#include "message_filters/sync_policies/approximate_time.h"
 
 #include "undistor.h"
+#include "tool.h"
 
 std::string IMAGE_TOPIC = "/usb_fish_eye_front/image_raw";
+std::string IMAGE0_TOPIC = "/usb_cam0/image_raw";
+std::string IMAGE1_TOPIC = "/usb_cam1/image_raw";
+
 using std::placeholders::_1;
+using std::placeholders::_2;
 
 class ImageSubscriber : public rclcpp::Node {
 public:
   ImageSubscriber(): Node("image_subscriber") {
-    _subscription = this->create_subscription<sensor_msgs::msg::Image>(
-      IMAGE_TOPIC, 10,std::bind(&ImageSubscriber::topic_callback, this, _1));
+    _publisher            = this->create_publisher<sensor_msgs::msg::Image>("cam0/image_raw", 10);
+    _publisher_stereo     = this->create_publisher<sensor_msgs::msg::Image>("cam1/image_raw", 10);
+    _static_broadcaster   = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
 
-    _publisher = this->create_publisher<sensor_msgs::msg::Image>("undistort_img", 10);
-
-    _static_broadcaster = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+    SuperTool::external_process();
     // publishStaticTransform();
+
+    // Mono
+    /*_subscription = this->create_subscription<sensor_msgs::msg::Image>(
+        IMAGE_TOPIC, 10,std::bind(&ImageSubscriber::topic_callback, this, _1));*/
+    image_sub1_.subscribe(this, IMAGE0_TOPIC);
+    image_sub2_.subscribe(this, IMAGE1_TOPIC);
+    sync_.reset(new message_filters::Synchronizer<SyncPolicy>(SyncPolicy(10), image_sub1_, image_sub2_));
+    sync_->registerCallback(std::bind(&ImageSubscriber::stereo_callback, this, _1, _2));
   }
 
   void topic_callback(const sensor_msgs::msg::Image::SharedPtr& msg) const {
     try {
-      cv_bridge::CvImagePtr cv_ptr;
-      cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+      const cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
       // cv::imshow("test", cv_ptr->image);
-
-      Undistor _undistor;
-      _undistor.ReciveSourceImg(cv_ptr);
-
-      auto undistor_msg = cv_bridge::CvImage(msg->header,"bgr8",_undistor.undistort_img);
+      _undistor_ptr->ReciveSourceImg(cv_ptr);
+      const auto undistor_msg = cv_bridge::CvImage(msg->header,"bgr8", _undistor_ptr->undistort_img);
       _publisher->publish(*undistor_msg.toImageMsg());
       // cv::waitKey(1);
 
@@ -41,6 +53,18 @@ public:
       RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
       return;
     }
+  }
+
+  void stereo_callback(const sensor_msgs::msg::Image::SharedPtr& msg_1,
+      const sensor_msgs::msg::Image::SharedPtr& msg_2) const {
+      const cv_bridge::CvImagePtr cv_ptr1 = cv_bridge::toCvCopy(msg_1, sensor_msgs::image_encodings::BGR8),
+                            cv_ptr2 = cv_bridge::toCvCopy(msg_2, sensor_msgs::image_encodings::BGR8);;
+      const std::pair<cv_bridge::CvImagePtr, cv_bridge::CvImagePtr> msg_pair(cv_ptr1, cv_ptr2);
+      _undistor_ptr->RecivePairImg(msg_pair);
+    const auto undistor_msg   = cv_bridge::CvImage(msg_1->header,"bgr8", _undistor_ptr->undistort_img);
+    const auto undistor_msg1  = cv_bridge::CvImage(msg_1->header,"bgr8", _undistor_ptr->undistort_img1);
+    _publisher->publish(*undistor_msg.toImageMsg());
+    _publisher_stereo->publish(*undistor_msg1.toImageMsg());
   }
 
   void publishStaticTransform() {
@@ -97,7 +121,7 @@ public:
       _static_broadcaster->sendTransform(rear_transform_stamped);*/
 
       // cam to imu
-      geometry_msgs::msg::TransformStamped frontcam_transform_stamped;
+      /*geometry_msgs::msg::TransformStamped frontcam_transform_stamped;
       frontcam_transform_stamped.header.stamp             = this->get_clock()->now();
       frontcam_transform_stamped.header.frame_id            = "imu";
       frontcam_transform_stamped.child_frame_id             = "front_cam";
@@ -108,35 +132,35 @@ public:
       frontcam_transform_stamped.transform.rotation.x       = 0.596368;
       frontcam_transform_stamped.transform.rotation.y       = -0.596368;
       frontcam_transform_stamped.transform.rotation.z       = -0.379928;
-      _static_broadcaster->sendTransform(frontcam_transform_stamped);
+      _static_broadcaster->sendTransform(frontcam_transform_stamped);*/
 
       geometry_msgs::msg::TransformStamped leftcam_transform_stamped;
       leftcam_transform_stamped.header.stamp                = this->get_clock()->now();
       leftcam_transform_stamped.header.frame_id             = "imu";
-      leftcam_transform_stamped.child_frame_id              = "left_cam";
-      leftcam_transform_stamped.transform.translation.x     = -0.24072;
-      leftcam_transform_stamped.transform.translation.y     = -0.13982;
-      leftcam_transform_stamped.transform.translation.z     = 0.19439;
-      leftcam_transform_stamped.transform.rotation.w        = -0.379928;
-      leftcam_transform_stamped.transform.rotation.x        = 0.596368;
-      leftcam_transform_stamped.transform.rotation.y        = 0.596368;
-      leftcam_transform_stamped.transform.rotation.z        = -0.379928;
+      leftcam_transform_stamped.child_frame_id              = "down_cam";
+      leftcam_transform_stamped.transform.translation.x     = 0.169668;
+      leftcam_transform_stamped.transform.translation.y     = 0.00376189;
+      leftcam_transform_stamped.transform.translation.z     = -0.0121544;
+      leftcam_transform_stamped.transform.rotation.w        = 0.630404;
+      leftcam_transform_stamped.transform.rotation.x        = -0.376417;
+      leftcam_transform_stamped.transform.rotation.y        = 0.328413;
+      leftcam_transform_stamped.transform.rotation.z        = -0.594176;
       _static_broadcaster->sendTransform(leftcam_transform_stamped);
 
       geometry_msgs::msg::TransformStamped rightcam_transform_stamped;
       rightcam_transform_stamped.header.stamp               = this->get_clock()->now();
       rightcam_transform_stamped.header.frame_id            = "imu";
-      rightcam_transform_stamped.child_frame_id             = "right_cam";
-      rightcam_transform_stamped.transform.translation.x    = 0.24072;
-      rightcam_transform_stamped.transform.translation.y    = -0.13983;
-      rightcam_transform_stamped.transform.translation.z    = 0.19439;
-      rightcam_transform_stamped.transform.rotation.w       = -0.379928;
-      rightcam_transform_stamped.transform.rotation.x       = 0.596368;
-      rightcam_transform_stamped.transform.rotation.y       = -0.596368;
-      rightcam_transform_stamped.transform.rotation.z       = 0.379928;
+      rightcam_transform_stamped.child_frame_id             = "up_cam";
+      rightcam_transform_stamped.transform.translation.x    = 0.0996881;
+      rightcam_transform_stamped.transform.translation.y    = 0.0068384;
+      rightcam_transform_stamped.transform.translation.z    = 0.056891;
+      rightcam_transform_stamped.transform.rotation.w       = 0.691532;
+      rightcam_transform_stamped.transform.rotation.x       = -0.193411;
+      rightcam_transform_stamped.transform.rotation.y       = 0.262262;
+      rightcam_transform_stamped.transform.rotation.z       = -0.644666;
       _static_broadcaster->sendTransform(rightcam_transform_stamped);
 
-      geometry_msgs::msg::TransformStamped rearcam_transform_stamped;
+      /*geometry_msgs::msg::TransformStamped rearcam_transform_stamped;
       rearcam_transform_stamped.header.stamp                = this->get_clock()->now();
       rearcam_transform_stamped.header.frame_id             = "imu";
       rearcam_transform_stamped.child_frame_id              = "rear_cam";
@@ -160,13 +184,21 @@ public:
       imuscan_transform_stamped.transform.rotation.x        = 0. ;
       imuscan_transform_stamped.transform.rotation.y        = 0.0;
       imuscan_transform_stamped.transform.rotation.z        = -0.707107;
-      _static_broadcaster->sendTransform(imuscan_transform_stamped);
+      _static_broadcaster->sendTransform(imuscan_transform_stamped);*/
 
   }
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr      _subscription;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         _publisher;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         _publisher_stereo;
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster>          _static_broadcaster;
+
+  typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image,
+      sensor_msgs::msg::Image> SyncPolicy;
+  message_filters::Subscriber<sensor_msgs::msg::Image> image_sub1_;
+  message_filters::Subscriber<sensor_msgs::msg::Image> image_sub2_;
+  std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+  std::shared_ptr<Undistor> _undistor_ptr;
 };
 
 void log_init(const char* argv) {
