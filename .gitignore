@@ -1,5 +1,5 @@
-build/
-config/
-.idea/
-log/
+build
+config
+.idea*
+log
 cmake_build*
