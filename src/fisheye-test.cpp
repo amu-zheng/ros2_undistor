@@ -7,67 +7,105 @@
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
-#include <message_filters/subscriber.h>
-#include <message_filters/time_synchronizer.h>
-#include "message_filters/sync_policies/approximate_time.h"
+#include <queue>
+#include <mutex>
+#include <thread>
 
 #include "undistor.h"
 #include "tool.h"
 
-std::string IMAGE_TOPIC = "/usb_fish_eye_front/image_raw";
-std::string IMAGE0_TOPIC = "/usb_cam0/image_raw";
-std::string IMAGE1_TOPIC = "/usb_cam1/image_raw";
+std::string IMAGE_TOPIC     = "/usb_fish_eye_front/image_raw";
+std::string IMAGE0_TOPIC    = "/usb_cam0/image_raw";
+std::string IMAGE1_TOPIC    = "/usb_cam1/image_raw";
+double SYNC_TOLERANCE       = 0.003;
 
 using std::placeholders::_1;
 using std::placeholders::_2;
 
 class ImageSubscriber : public rclcpp::Node {
 public:
-  ImageSubscriber(): Node("image_subscriber") {
-    _publisher            = this->create_publisher<sensor_msgs::msg::Image>("cam0/image_raw", 10);
-    _publisher_stereo     = this->create_publisher<sensor_msgs::msg::Image>("cam1/image_raw", 10);
-    _static_broadcaster   = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+    ImageSubscriber(): Node("image_subscriber") {
+        _publisher            = this->create_publisher<sensor_msgs::msg::Image>("cam0/image_raw", 10);
+        _publisher_stereo     = this->create_publisher<sensor_msgs::msg::Image>("cam1/image_raw", 10);
+        _static_broadcaster   = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+        _undistor_ptr         = std::make_shared<Undistor>();
+        // SuperTool::external_process();
+        // publishStaticTransform();
 
-    SuperTool::external_process();
-    // publishStaticTransform();
+        // Mono
+        /*_subscription = this->create_subscription<sensor_msgs::msg::Image>(
+            IMAGE0_TOPIC, 10,std::bind(&ImageSubscriber::topic_callback, this, _1));*/
 
-    // Mono
-    /*_subscription = this->create_subscription<sensor_msgs::msg::Image>(
-        IMAGE_TOPIC, 10,std::bind(&ImageSubscriber::topic_callback, this, _1));*/
-    image_sub1_.subscribe(this, IMAGE0_TOPIC);
-    image_sub2_.subscribe(this, IMAGE1_TOPIC);
-    sync_.reset(new message_filters::Synchronizer<SyncPolicy>(SyncPolicy(10), image_sub1_, image_sub2_));
-    sync_->registerCallback(std::bind(&ImageSubscriber::stereo_callback, this, _1, _2));
-  }
-
-  void topic_callback(const sensor_msgs::msg::Image::SharedPtr& msg) const {
-    try {
-      const cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-      // cv::imshow("test", cv_ptr->image);
-      _undistor_ptr->ReciveSourceImg(cv_ptr);
-      const auto undistor_msg = cv_bridge::CvImage(msg->header,"bgr8", _undistor_ptr->undistort_img);
-      _publisher->publish(*undistor_msg.toImageMsg());
-      // cv::waitKey(1);
-
-    } catch(cv_bridge::Exception& e) {
-      RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
-      return;
+        _image_subscriber0 = this->create_subscription<sensor_msgs::msg::Image>(
+            IMAGE0_TOPIC, 10,std::bind(&ImageSubscriber::img0_callback, this, _1));
+        _image_subscriber1 = this->create_subscription<sensor_msgs::msg::Image>(
+            IMAGE1_TOPIC, 10,std::bind(&ImageSubscriber::img1_callback, this, _1));
     }
-  }
 
-  void stereo_callback(const sensor_msgs::msg::Image::SharedPtr& msg_1,
-      const sensor_msgs::msg::Image::SharedPtr& msg_2) const {
-      const cv_bridge::CvImagePtr cv_ptr1 = cv_bridge::toCvCopy(msg_1, sensor_msgs::image_encodings::BGR8),
-                            cv_ptr2 = cv_bridge::toCvCopy(msg_2, sensor_msgs::image_encodings::BGR8);;
-      const std::pair<cv_bridge::CvImagePtr, cv_bridge::CvImagePtr> msg_pair(cv_ptr1, cv_ptr2);
-      _undistor_ptr->RecivePairImg(msg_pair);
-    const auto undistor_msg   = cv_bridge::CvImage(msg_1->header,"bgr8", _undistor_ptr->undistort_img);
-    const auto undistor_msg1  = cv_bridge::CvImage(msg_1->header,"bgr8", _undistor_ptr->undistort_img1);
-    _publisher->publish(*undistor_msg.toImageMsg());
-    _publisher_stereo->publish(*undistor_msg1.toImageMsg());
-  }
+    void topic_callback(const sensor_msgs::msg::Image::SharedPtr msg) const {
+        try {
+          const cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+          // cv::imshow("test", cv_ptr->image);
+          _undistor_ptr->ReciveSourceImg(cv_ptr);
+          const auto undistor_msg = cv_bridge::CvImage(msg->header,"bgr8", _undistor_ptr->undistort_img);
+          _publisher->publish(*undistor_msg.toImageMsg());
+          // cv::waitKey(1);
 
-  void publishStaticTransform() {
+        } catch(cv_bridge::Exception& e) {
+          RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
+          return;
+        }
+    }
+
+    void img0_callback(const sensor_msgs::msg::Image::SharedPtr img_msg) {
+        _m_buf.lock();
+        _img0_buf.push(img_msg);
+        _m_buf.unlock();
+    }
+
+    void img1_callback(const sensor_msgs::msg::Image::SharedPtr img_msg) {
+        _m_buf.lock();
+        _img1_buf.push(img_msg);
+        _m_buf.unlock();
+    }
+
+    void sync_process() {
+        while (true) {
+            cv_bridge::CvImagePtr image0 = nullptr, image1 = nullptr;
+            std_msgs::msg::Header header;
+            _m_buf.lock();
+            if (!_img0_buf.empty() && !_img1_buf.empty()) {
+                double time0 = _img0_buf.front()->header.stamp.sec;
+                double time1 = _img1_buf.front()->header.stamp.sec;
+                // 0.003s sync tolerance
+                if(time0 < time1 - SYNC_TOLERANCE) {
+                    _img0_buf.pop();
+                    LOG(INFO) << "throw img0";
+                } else if(time0 > time1 + SYNC_TOLERANCE) {
+                    _img1_buf.pop();
+                    LOG(INFO) << "throw img1";
+                } else {
+                    header = _img0_buf.front()->header;
+                    image0 = cv_bridge::toCvCopy(_img0_buf.front(), sensor_msgs::image_encodings::BGR8);
+                    _img0_buf.pop();
+                    image1 = cv_bridge::toCvCopy(_img1_buf.front(), sensor_msgs::image_encodings::BGR8);
+                    _img1_buf.pop();
+                }
+            }
+            _m_buf.unlock();
+            if(image0 != nullptr) {
+                _undistor_ptr->RecivePairImg(image0, image1);
+                const auto undistor_msg   = cv_bridge::CvImage(header,"bgr8", _undistor_ptr->undistort_img);
+                const auto undistor_msg1  = cv_bridge::CvImage(header,"bgr8", _undistor_ptr->undistort_img1);
+                _publisher->publish(*undistor_msg.toImageMsg());
+                _publisher_stereo->publish(*undistor_msg1.toImageMsg());
+            }
+            std::chrono::milliseconds dura(2);
+            std::this_thread::sleep_for(dura);
+        }
+    }
+
+    void publishStaticTransform() {
       /*geometry_msgs::msg::TransformStamped front_transform_stamped;
       front_transform_stamped.header.stamp                = this->get_clock()->now();
       front_transform_stamped.header.frame_id               = "base_line";
@@ -186,42 +224,44 @@ public:
       imuscan_transform_stamped.transform.rotation.z        = -0.707107;
       _static_broadcaster->sendTransform(imuscan_transform_stamped);*/
 
-  }
+    }
 
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr      _subscription;
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         _publisher;
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         _publisher_stereo;
-  std::shared_ptr<tf2_ros::StaticTransformBroadcaster>          _static_broadcaster;
-
-  typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image,
-      sensor_msgs::msg::Image> SyncPolicy;
-  message_filters::Subscriber<sensor_msgs::msg::Image> image_sub1_;
-  message_filters::Subscriber<sensor_msgs::msg::Image> image_sub2_;
-  std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
-  std::shared_ptr<Undistor> _undistor_ptr;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr      _subscription;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr      _image_subscriber0;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr      _image_subscriber1;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         _publisher;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         _publisher_stereo;
+    std::shared_ptr<tf2_ros::StaticTransformBroadcaster>          _static_broadcaster;
+    std::queue<sensor_msgs::msg::Image::SharedPtr>                _img0_buf;
+    std::queue<sensor_msgs::msg::Image::SharedPtr>                _img1_buf;
+    std::shared_ptr<Undistor>                                     _undistor_ptr;
+    std::mutex                                                    _m_buf;
 };
 
 void log_init(const char* argv) {
-  FLAGS_logbufsecs = 0;
-  FLAGS_colorlogtostderr = true;
-  // FLAGS_logtostderr = true;
-  const std::string package_name = "fisheye-undist";
-  const std::string log_path = ament_index_cpp::get_package_share_directory(package_name) + "/log";
-  google::SetLogDestination(google::INFO, log_path.c_str());
-  google::SetStderrLogging(google::INFO);
-  google::InstallFailureSignalHandler();
-  google::SetLogFilenameExtension(".log");
-  google::InitGoogleLogging(argv);
+    FLAGS_logbufsecs = 0;
+    FLAGS_colorlogtostderr = true;
+    // FLAGS_logtostderr = true;
+    const std::string package_name = "fisheye-undist";
+    const std::string log_path = ament_index_cpp::get_package_share_directory(package_name) + "/log";
+    google::SetLogDestination(google::INFO, log_path.c_str());
+    google::SetStderrLogging(google::INFO);
+    google::InstallFailureSignalHandler();
+    google::SetLogFilenameExtension(".log");
+    google::InitGoogleLogging(argv);
 }
 
 int main(const int argc, char ** argv) {
-  (void) argc;
-  (void) argv;
-  log_init(argv[0]);
-  LOG(INFO) << "hello world fisheye-undist package";
-  rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<ImageSubscriber>());
-  rclcpp::shutdown();
-  google::ShutdownGoogleLogging();
-  return 0;
+    (void) argc;
+    (void) argv;
+    log_init(argv[0]);
+    LOG(INFO) << "hello world fisheye-undist package";
+    rclcpp::init(argc, argv);
+    // TODO(amu): time synchronization
+    auto node = std::make_shared<ImageSubscriber>();
+    std::thread sync_thread{&ImageSubscriber::sync_process, node};
+    rclcpp::spin(node);
+    rclcpp::shutdown();
+    google::ShutdownGoogleLogging();
+    return 0;
 }

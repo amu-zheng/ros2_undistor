@@ -37,14 +37,13 @@ class Undistor {
     }
 
     void ReciveSourceImg(const cv_bridge::CvImagePtr& img_ptr);
-    void RecivePairImg(const std::pair<cv_bridge::CvImagePtr, cv_bridge::CvImagePtr>& img_ptr);
+    void RecivePairImg(cv_bridge::CvImagePtr& img0_ptr, cv_bridge::CvImagePtr& img1_ptr);
 
     cv::Mat undistort_img, undistort_img1;
+    cv::Mat _src_img, _src_img1;
 
  private:
     void Processor();
-
-    cv::Mat _src_img, _src_img1;
     cv::Mat K = cv::Mat::eye(3,3,CV_32F),
             D = cv::Mat::zeros(4,1,CV_32F);
 

@@ -2,3 +2,4 @@ build/
 config/
 .idea/
 log/
+cmake_build*

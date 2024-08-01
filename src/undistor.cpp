@@ -10,11 +10,12 @@ void Undistor::ReciveSourceImg(const cv_bridge::CvImagePtr& img_ptr) {
     Processor();
 }
 
-void Undistor::RecivePairImg(const std::pair<cv_bridge::CvImagePtr, cv_bridge::CvImagePtr>& img_ptr)
+void Undistor::RecivePairImg(cv_bridge::CvImagePtr& img0_ptr, cv_bridge::CvImagePtr& img1_ptr)
 {
-    _src_img            = img_ptr.first->image;
-    _src_img1           = img_ptr.second->image;
-    _time_stamp         = img_ptr.first->header.stamp.sec;
+    // LOG(WARNING) << "recive two images!!!";
+    _src_img            = img0_ptr->image;
+    _src_img1           = img1_ptr->image;
+    _time_stamp         = img0_ptr->header.stamp.sec;
     _cam_type           = CameraModel::Stereo;
     Processor();
 }
@@ -42,5 +43,7 @@ void Undistor::Processor() {
         cv::fisheye::initUndistortRectifyMap(K1, D1, cv::Mat(), K1,
             cv::Size(_src_img1.cols,_src_img1.rows), CV_16SC2, map1, map2);
         cv::remap(_src_img1, undistort_img1, map1, map2, cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+        // cv::imshow("test", undistort_img1);
     }
+    // cv::waitKey(1);
 }
