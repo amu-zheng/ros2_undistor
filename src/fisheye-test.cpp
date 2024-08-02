@@ -22,6 +22,8 @@ double SYNC_TOLERANCE       = 0.003;
 using std::placeholders::_1;
 using std::placeholders::_2;
 
+int NUM = 0;
+
 class ImageSubscriber : public rclcpp::Node {
 public:
     ImageSubscriber(): Node("image_subscriber") {
@@ -85,11 +87,26 @@ public:
                     _img1_buf.pop();
                     LOG(INFO) << "throw img1";
                 } else {
+                    LOG(INFO) << "receive tow images!!!!";
                     header = _img0_buf.front()->header;
                     image0 = cv_bridge::toCvCopy(_img0_buf.front(), sensor_msgs::image_encodings::BGR8);
                     _img0_buf.pop();
                     image1 = cv_bridge::toCvCopy(_img1_buf.front(), sensor_msgs::image_encodings::BGR8);
                     _img1_buf.pop();
+                    // TODO(): chack chmod
+                    char c = getchar();
+                    if (c == 's')
+                    {
+                        std::string path = "/home/user/data/result/";
+                        std::string path_1 = path + std::to_string(NUM) + "_left_" + std::to_string(image0->header.stamp.sec)
+                                             + "_"+ std::to_string(image0->header.stamp.nanosec) + ".jpg";
+                        std::string path_2 = path + std::to_string(NUM) + "_right_" + std::to_string(image1->header.stamp.sec)
+                                             + "_"+ std::to_string(image1->header.stamp.nanosec) + ".jpg";
+                        cv::imwrite(path_1, image0->image);
+                        cv::imwrite(path_2, image1->image);
+                        LOG(INFO) << "Save successfully!!!!";
+                        NUM++;
+                    }
                 }
             }
             _m_buf.unlock();
